@@ -1,0 +1,143 @@
+﻿{
+  "entities": {
+    "product": {
+      "primaryKey": "productId",
+      "fields": [
+        "productId",
+        "productName",
+        "description",
+        "supplierId",
+        "createdAt",
+        "updatedAt",
+        "imageUrl"
+      ]
+    },
+    "productcategory": {
+      "primaryKey": "productCategoryId",
+      "fields": [
+        "productCategoryId",
+        "productId",
+        "price",
+        "cost",
+        "createdAt"
+      ]
+    },
+    "supplier": {
+      "primaryKey": "supplierId",
+      "fields": [
+        "supplierId",
+        "supplierName",
+        "contactPerson",
+        "phoneNumber",
+        "supplierEmail",
+        "address",
+        "createdAt",
+        "updatedAt",
+        "supplierStatus"
+      ]
+    },
+    "expense": {
+      "primaryKey": "id",
+      "fields": [
+        "id",
+        "userId",
+        "occurredOn",
+        "amount",
+        "categoryId",
+        "contactId",
+        "notes",
+        "createdAt"
+      ]
+    },
+    "category": {
+      "primaryKey": "id",
+      "fields": [ "id", "name" ]
+    },
+    "contact": {
+      "primaryKey": "id",
+      "fields": [ "id", "name" ]
+    },
+    "label": {
+      "primaryKey": "id",
+      "fields": [ "id", "name" ]
+    },
+    "expense_label": {
+      "primaryKey": "id",
+      "fields": [ "id", "expenseId", "labelId" ]
+    },
+    "budget": {
+      "primaryKey": "id",
+      "fields": [ "id", "monthYear", "monthlyBudgetAmount" ]
+    },
+    "budgethistory": {
+      "primaryKey": "id",
+      "fields": [ "id", "budgetId", "changedAt", "oldAmount", "newAmount" ]
+    }
+  },
+  "relations": [
+    {
+      "from": "productcategory",
+      "to": "product",
+      "fromField": "productId",
+      "toField": "productId"
+    },
+    {
+      "from": "product",
+      "to": "supplier",
+      "fromField": "supplierId",
+      "toField": "supplierId"
+    },
+    {
+      "from": "expense",
+      "to": "category",
+      "fromField": "categoryId",
+      "toField": "id"
+    },
+    {
+      "from": "expense",
+      "to": "contact",
+      "fromField": "contactId",
+      "toField": "id"
+    },
+    {
+      "from": "expense_label",
+      "to": "expense",
+      "fromField": "expenseId",
+      "toField": "id"
+    },
+    {
+      "from": "expense_label",
+      "to": "label",
+      "fromField": "labelId",
+      "toField": "id"
+    },
+    {
+      "from": "budgethistory",
+      "to": "budget",
+      "fromField": "budgetId",
+      "toField": "id"
+    }
+  ],
+  "synonyms": {
+    "price": [ "price", "sellingprice", "amount" ],
+    "cost": [ "cost", "suppliercost" ],
+    "supplier": [ "vendor", "provider" ],
+    "product": [ "item", "goods" ],
+    "expense": [ "expense", "expenses", "spend", "spending", "cost", "costs" ],
+    "category": [ "category", "group", "type" ],
+    "contact": [ "supplier", "vendor", "contact" ],
+    "label": [ "label", "tag" ],
+    "notes": [ "notes", "memo", "remark" ],
+    "sales": [ "sales", "revenue", "turnover" ],
+    "orders": [ "orders", "order count" ],
+    "units": [ "units", "quantity", "qty" ],
+    "aov": [ "aov", "average order value", "avg order value" ],
+    "top": [ "top", "best", "highest" ],
+    "bottom": [ "bottom", "slow", "slowest", "worst" ],
+    "status": [ "status", "state" ]
+  },
+  "guardrails": {
+    "maxLimit": 50,
+    "allowOps": [ "vector_search", "select", "join", "aggregate" ]
+  }
+}
