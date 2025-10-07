@@ -1,0 +1,157 @@
+﻿name: expense_report_generator
+version: "0.3.1"
+
+model:
+  name: groq/gemma2-9b-it
+  temperature: 0.2
+  max_output_tokens: 1600
+
+# -------------------------
+# Phase 1 (ACK only; runner pre-executes SQL)
+# -------------------------
+phase1:
+  system: |
+    Deterministic mode. The application supplies canonical inputs and pre-executed SQL rows.
+    Do NOT pick queries. Do NOT mention any query IDs. Just acknowledge.
+
+    INPUT (from app):
+    {
+      "period": { "start":"YYYY-MM-DD","end":"YYYY-MM-DD","label":"" },
+      "user_id": "uuid-or-int",
+      "rows": {
+        "EXPENSE_SUMMARY": [ { "total":0, "prev_total":0 } ],
+        "TOP_EXPENSE_CATEGORIES": [ { "category":"", "amount":0, "share_pct":0 } ],
+        "EXPENSE_BY_CATEGORY_WEEKLY": [ { "week":"YYYY-WW", "category":"", "amount":0 } ]
+      },
+      "derived": {
+        "spikes": [ { "week":"YYYY-WW", "category":"", "amount":0 } ] | []
+      }
+    }
+
+    REQUIRED OUTPUT:
+    {"intent":"expense_report","ack":true}
+
+  user: |
+    Please acknowledge.
+
+# -------------------------
+# Phase 2 (render UI spec)
+# -------------------------
+phase2:
+  system: |
+    You are rendering an Expense Report UI spec as JSON. Use ONLY the numbers provided in rows. Do not invent new numbers.
+    If a dataset is empty or missing, omit the related text or section gracefully.
+    Currency formatting is handled by the client—return raw numbers (no ₱, commas, or percent signs).
+
+    Constraints:
+      - Use EXPENSE_SUMMARY.total and .prev_total for "Spending Overview".
+      - For "Top Categories", list the top ~5 from TOP_EXPENSE_CATEGORIES as a simple table.
+      - For "Saving Tips/Ideas", write 2–4 short bullets; do NOT invent figures—tips must be general or category-anchored.
+      - For "Anomalies & Spikes", prefer derived.spikes; otherwise use the single highest row from EXPENSE_BY_CATEGORY_WEEKLY.
+      - Do not compute new percentages beyond share_pct already provided.
+      - Avoid contradictions: if prev_total is 0, avoid percent deltas—use plain wording.
+      - Output JSON object only.
+
+    INPUT SHAPE:
+    {
+      "period": {"start":"","end":"","label":""},
+      "rows": {
+        "EXPENSE_SUMMARY":[{"total":0,"prev_total":0}],
+        "TOP_EXPENSE_CATEGORIES":[{"category":"","amount":0,"share_pct":0}],
+        "EXPENSE_BY_CATEGORY_WEEKLY":[{"week":"YYYY-WW","category":"","amount":0}]
+      },
+      "derived":{"spikes":[{"week":"YYYY-WW","category":"","amount":0}] } | {}
+    }
+
+    TARGET UI SPEC SHAPE:
+    {
+      "report_title": "Expense Report",
+      "period": {"label": ""},
+      "sections": [
+        {
+          "id": "expense_overview",
+          "title": "Spending Overview",
+          "narrative": ["...2–4 sentences grounded on EXPENSE_SUMMARY..."],
+          "cards": [
+            {
+              "type": "stat",
+              "items": [
+                {"label":"Total Expenses","value":0},
+                {"label":"Prior Period Total","value":0}     # include only if prev_total > 0
+              ]
+            }
+          ]
+        },
+        {
+          "id": "expense_top_categories",
+          "title": "Top Categories & Saving Tips",
+          "narrative": [
+            "...1–2 sentences summarizing category concentration using TOP_EXPENSE_CATEGORIES (no new %)..."
+          ],
+          "cards": [
+            {
+              "type": "table",
+              "title": "Top Categories",
+              "items": [
+                {"category":"", "amount":0, "share_pct":0}
+              ]
+            },
+            {
+              "type": "tips",
+              "title": "Saving Ideas",
+              "bullets": [
+                "Short actionable tip (generic or tied to a listed category).",
+                "Another concise tip (e.g., review subscriptions/utilities schedule).",
+                "Optional third/fourth tip."
+              ]
+            }
+          ]
+        },
+        {
+          "id": "expense_spikes",
+          "title": "Anomalies & Spikes",
+          "narrative": [
+            "...1–3 bullets noting notable spikes strictly from derived.spikes or EXPENSE_BY_CATEGORY_WEEKLY..."
+          ],
+          "cards": [
+            {
+              "type":"table",
+              "title":"Flagged Spikes",
+              "items":[
+                {"week":"", "category":"", "amount":0}
+              ]
+            }
+          ]
+        }
+      ],
+      "actions": [
+        {"id":"download_pdf","label":"Download PDF"}
+      ]
+    }
+
+    Authoring Tips:
+      - Keep narratives tight. Avoid long prose.
+      - For spikes, prefer the provided derived.spikes list; if empty, select the single row with the maximum amount from EXPENSE_BY_CATEGORY_WEEKLY and mention it.
+      - Do not add charts in this spec for expenses (token control).
+
+  user: |
+    Render the Expense Report UI spec now based on the provided period and rows.
+
+metadata:
+  domain: "expenses"
+  features:
+    - id: "expense_overview"
+      label: "Spending Overview"
+      sample_prompts:
+        - "Create an expense overview for this month."
+        - "Total expenses last week."
+    - id: "expense_top_categories"
+      label: "Top Categories & Saving Ideas"
+      sample_prompts:
+        - "Show top expense categories for last month."
+        - "Any saving ideas based on categories this month?"
+    - id: "expense_spikes"
+      label: "Anomalies/Spikes"
+      sample_prompts:
+        - "Show expense spikes this week."
+        - "Any unusual expenses last month?"

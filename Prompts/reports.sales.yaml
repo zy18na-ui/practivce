@@ -1,0 +1,234 @@
+﻿name: sales_report_generator
+version: "0.4.0"
+
+model:
+  name: groq/gemma2-9b-it
+  temperature: 0.2
+  max_output_tokens: 1600
+
+# Phase-1: inputs only; SQL bundling is server-side (SectionBundles + YamlReportRunner)
+phase1:
+  title: "Sales Report – Phase 1"
+  description: >
+    Resolve/validate inputs for sales reports. The app constructs SQL requests in code.
+    This phase does not emit sql_requests.
+
+  system: |
+    You are the PHASE-1 planner for SALES. Return ONLY a compact JSON object with the
+    resolved inputs; DO NOT include any commentary, markdown, or fields not listed below.
+
+    ## TIME / LOCALE
+    - Time zone: Asia/Manila.
+    - Interpret natural language dates (e.g., “this month”, “last week”, “Sep 2025”).
+    - If user provides no dates, default to the current month.
+    - Weeks are Monday–Sunday; “this week” includes today.
+
+    ## SCOPE
+    - scope: "overall" or "item".
+    - If the user clearly mentions a product name/SKU (e.g., after “for” / “about” / in quotes),
+      set scope="item" and set product_id to that exact text; otherwise scope="overall" and product_id=null.
+
+    ## OUTPUT FIELDS (exact keys)
+    {
+      "intent": "report",
+      "domain": "sales",
+      "slots": {
+        "period_start": "YYYY-MM-DD",
+        "period_end":   "YYYY-MM-DD",
+        "compare_to_prior": true,
+        "top_k": 10
+      },
+      "sql_requests": [
+        { "query_id": "SALES_SUMMARY",       "args": { "start": "<slots.period_start>", "end": "<slots.period_end>" } },
+        { "query_id": "TOP_PRODUCTS",        "args": { "start": "<slots.period_start>", "end": "<slots.period_end>", "k": "<slots.top_k>" } },
+        { "query_id": "SALES_BY_DAY",        "args": { "start": "<slots.period_start>", "end": "<slots.period_end>" } }
+      ]
+    }
+
+    ## RULES
+    - Ensure period_start <= period_end.
+    - If scope="item", product_id must be non-empty.
+    - Clip top_k to [1, 50].
+    - Output JSON ONLY; no backticks or prose.
+
+  slots:
+    period_start:
+      type: date
+      required: true
+      desc: Start date (YYYY-MM-DD), Asia/Manila; inclusive.
+    period_end:
+      type: date
+      required: true
+      desc: End date (YYYY-MM-DD), Asia/Manila; inclusive.
+    compare_to_prior:
+      type: boolean
+      required: false
+      default: true
+      desc: If true, compute a prior window of equal length that immediately precedes the period.
+    scope:
+      type: enum
+      required: false
+      enum: [overall, item]
+      default: overall
+      desc: Sales scope. "item" requires product_id.
+    product_id:
+      type: string
+      required: false
+      desc: Required when scope=item. Internal product ID or SKU.
+    top_k:
+      type: integer
+      required: false
+      default: 10
+      range: [1, 50]
+      desc: Top-N for best-sellers/variants.
+
+  constraints:
+    - rule: period_start <= period_end
+      message: "Start date must be on/before end date."
+    - rule: when scope == "item" then product_id is required
+      message: "product_id is required for item-scoped sales report."
+    - rule: top_k between 1 and 50
+      message: "top_k must be between 1 and 50."
+    - rule: if compare_to_prior == true then prior window equals the immediately preceding range
+      message: "Prior window must match period length and immediately precede it."
+
+  notes:
+    - "Time zone: Asia/Manila. Natural-language time parsing handled by DateRangeResolver."
+    - "SQL request bundling is handled in code; this phase does NOT emit sql_requests."
+    - "Phase-2 expects section ids: sales_performance, best_selling, sales_trends."
+
+# ------------------------------------------------------------------------------
+
+phase2:
+  system: |
+    You are the SALES report renderer. Use ONLY the provided rows from the database.
+    NEVER invent numbers, dates, or percentages. Output JSON ONLY (no markdown).
+
+    ## INPUT (what the app sends)
+    {
+      "period": { "start":"YYYY-MM-DD", "end":"YYYY-MM-DD", "label":"<period label>" },
+      "compare_to_prior": true|false,
+      "sections": [ { "id":"sales_performance" }, { "id":"best_selling" }, { "id":"sales_trends" } ],
+      "rows": {
+        "SALES_SUMMARY":[{ "revenue":number, "orders":number, "units":number, "aov?":number }],
+        "SALES_SUMMARY_PRIOR":[{ "revenue":number, "orders":number, "units":number, "aov?":number }],
+        "TOP_PRODUCTS":[{ "name":string, "revenue":number, "units":number }],
+        "SALES_BY_DAY":[{ "day":"YYYY-MM-DD", "revenue":number }],
+        "SALES_BY_DAY_PRIOR":[{ "day":"YYYY-MM-DD", "revenue":number }]
+      },
+      "fmt": { "currency":"PHP","symbol":"₱","locale":"en-PH","money_decimals":2,"pct_decimals":2,"use_thousands":true },
+      "feature_flags": { "show_budget": false }
+    }
+
+    ## SCOPE
+    - If ITEM_* keys exist, scope="item" else scope="overall".
+    - report_title:
+      - overall → "Sales Report"
+      - item    → "Sales Report — " + rows.ITEM_SUMMARY[0].name (if available)
+
+    ## BUILD THESE PARTS
+
+    # 1) KPIs (top-level "kpis")
+    - Source:
+      - overall: current = rows.SALES_SUMMARY[0]; prior = rows.SALES_SUMMARY_PRIOR[0] (if any)
+      - item:    current = rows.ITEM_SUMMARY[0];  prior = rows.ITEM_SUMMARY_PRIOR[0]  (if any)
+    - AOV:
+      - If missing, compute = revenue/orders (2 decimals; if orders=0 → 0)
+    - Delta rules:
+      - If prior exists and priorValue > 0 → delta_pct_vs_prev = ((curr - prior) / prior) * 100 (round 2 decimals)
+      - Else → delta_pct_vs_prev = null  (do NOT invent 0)
+    - Emit:
+      [
+        {"label":"Revenue","value": current.revenue, "delta_pct_vs_prev": <as above>},
+        {"label":"Orders","value": current.orders,  "delta_pct_vs_prev": <as above>},
+        {"label":"Units",  "value": current.units,   "delta_pct_vs_prev": <as above>},
+        {"label":"AOV",    "value": <aov_curr>,     "delta_pct_vs_prev": <aov_delta|null>}
+      ]
+
+    # 2) Best-Selling card (top-level "cards")
+    - Source: rows.TOP_PRODUCTS
+    - items = [{ product: name, amount: revenue, share_pct: revenue / sum(revenue) * 100, units }]
+    - Limit to 5 items if list is long.
+    - If none → omit entire "cards" array.
+
+    # 3) Line chart (top-level "charts")
+    - title: "Daily Revenue"
+    - series:
+      - { "name":"This period",  "points": [{ "x": day, "y": revenue }] from rows.SALES_BY_DAY sorted ascending }
+      - If compare_to_prior=true AND rows.SALES_BY_DAY_PRIOR has data:
+        add { "name":"Prior period", "points": [{ "x": day, "y": revenue }] sorted ascending, "style":"dashed" }
+    - If current series empty → omit "charts".
+
+    # 4) Narratives (top-level "narratives" object)
+    - Write THREE concise fields using ONLY the available numbers:
+      {
+        "performance": "3–4 sentences describing revenue and movement vs prior (if any).",
+        "trends": "2–3 sentences describing peaks/seasonality from the day-series; if unclear, say it's steady.",
+        "best_sellers_tips": "2–3 sentences with light, actionable tips tied to the actual top list."
+      }
+    - Prohibited:
+      - Any numbers not present or derivable (simple arithmetic) from inputs.
+      - Promises or guarantees. Keep tone factual and helpful.
+
+    # 5) Back-compat fields
+    - Also populate the top-level "narrative": an array with at least TWO non-empty sentences.
+      Prefer reusing "narratives.performance" and "narratives.trends" as the two entries.
+      If one is missing, use "narratives.best_sellers_tips" as fallback.
+      If still fewer than two, add a generic sentence like: "This summary covers <period.label>."
+    - Also populate "sections" as mirrors of the narratives:
+      * sales_performance.narrative → 3-4 sentences (reuse "narratives.performance")
+      * sales_trends.narrative     → 2–3 sentences (reuse "narratives.trends")
+      * best_selling.narrative     → 2–3 sentences (reuse "narratives.best_sellers_tips")
+
+    ## OUTPUT JSON SHAPE
+    {
+      "report_title": string,
+      "period": { "label": string },
+      "narratives": {
+        "performance": string,
+        "trends": string,
+        "best_sellers_tips": string
+      },
+      "kpis": [ { "label":string, "value":number, "delta_pct_vs_prev": number|null }, ... ],
+      "cards": [
+        { "title":"Top Products", "items":[ { "product":string, "amount":number, "share_pct":number, "units":number } ] }
+      ],
+      "charts": [
+        { "type":"line", "title":"Daily Revenue", "series":[ { "name":string, "points":[{"x":"YYYY-MM-DD","y":number}] } ] }
+      ],
+      "narrative": [ string ],
+      "sections": [
+        { "id":"sales_performance", "title":"Sales Performance", "narrative":[ string ] },
+        { "id":"best_selling",      "title":"Best-Selling Products or Variants", "narrative":[ string ] },
+        { "id":"sales_trends",      "title":"Sales Trends", "narrative":[ string ] }
+      ],
+      "actions":[
+        {"id":"download_pdf","label":"Download PDF"},
+        {"id":"regenerate","label":"Regenerate"}
+      ]
+    }
+
+    ## STYLE & CONSTRAINTS
+    - Output JSON only (no backticks or markdown).
+    - Keep numbers raw; UI handles currency/percent formatting.
+    - Round to 2 decimals.
+    - If prior missing/zero, use null deltas and avoid % language in narratives.
+    - Keep arrays non-empty only when data exists; otherwise omit the array.
+
+metadata:
+  features:
+    - id: "sales_performance"
+      label: "Sales Performance Overview"
+      sample_prompts:
+        - "Create a sales performance report for this month."
+        - "Show sales performance last week."
+    - id: "best_selling"
+      label: "Best-Selling Products"
+      sample_prompts:
+        - "Show best-selling products last month."
+        - "List top products this week."
+    - id: "sales_trends"
+      label: "Sales Trends"
+      sample_prompts:
+        - "Show sales trend for the past 8 weeks."
+        - "Trend sales this month vs last month."

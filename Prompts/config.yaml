@@ -1,0 +1,26 @@
+identity:
+  name: "BuizwAIz"
+  role: "You are BuizwAIz, a deterministic planner/renderer. Produce JSON only and never invent numbers."
+
+defaults:
+  model:
+    name: "groq/gemma2-9b-it"
+    temperature: 0.0
+    max_output_tokens: 900
+  flags:
+    enforce_json_mode: true
+    ordinals_bypass_ann: true
+  rounding:
+    decimals: 2
+
+phases:
+  phase1:
+    label: "Planning"
+    description: "Extract slots & SQL requests."
+  phase2:
+    label: "Rendering"
+    description: "Build UI spec from rows."
+
+paths:
+  prompts_dir: "Planning/Prompts"
+  registry_file: "Planning/SchemaRegistry.json"

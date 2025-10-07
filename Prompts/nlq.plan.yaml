@@ -1,0 +1,138 @@
+﻿# Canonical NLQ plan spec (strict JSON shape + policy + few-shots)
+
+spec:
+  mode: ["answer", "report"]
+  domains: ["expense", "sales", "inventory"]
+
+  metrics:
+    expense: ["total_expense"]  # deterministic default; router may set more
+    sales: ["revenue", "orders", "units", "avg_order_value", "top_product"]
+    inventory: ["summary"]      # report-only in MVP
+
+  time:
+    preset: ["today","yesterday","this_week","last_week","this_month","last_month","as_of","range"]
+    start: "YYYY-MM-DD|null"
+    end:   "YYYY-MM-DD|null"
+    grain: ["day","week","month|null"]
+
+  filters:
+    - { field: "string", op: "eq|neq|gt|gte|lt|lte|contains|icontains", value: "string|number" }
+
+  compare_to_prior: "boolean (must be false for inventory)"
+  confidence: "float 0.1..1.0"
+
+policies:
+  timezone: "Asia/Manila"
+  week: "Monday–Sunday"
+  this_week_includes_today: true
+  compare_window: "equal length prior window"
+  inventory_compare: "not supported; guard blocks with friendly message"
+  joins:
+    - "expense-by-product is not supported (suggest sales by product instead)"
+
+# For safety: only these query_ids may be executed by fallback planning.
+# Keep both legacy and new IDs so you can phase-in changes safely.
+allowed_query_ids:
+  expense:
+    - "EXPENSE_SUMMARY"
+    - "TOP_EXPENSE_CATEGORIES"
+    - "EXPENSE_BY_CATEGORY_WEEKLY"
+    - "EXPENSE_BY_DAY"
+    - "EXPENSE_BY_CATEGORY"
+    - "EXPENSE_BY_SUPPLIER"
+    - "TOP_EXPENSE_SUPPLIERS"
+    - "EXPENSE_RECENT_TRANSACTIONS"
+    - "EXPENSE_LABEL_BREAKDOWN"
+    - "EXPENSE_BUDGET_VS_ACTUAL"
+
+  sales:
+    - "SALES_SUMMARY"
+    - "TOP_PRODUCTS"
+    - "SALES_BY_DAY"
+
+  inventory:
+    # Legacy inventory IDs (present in your SqlCatalog now)
+    - "INVENTORY_SNAPSHOT"
+    - "LOW_STOCK_ITEMS"
+    - "STOCK_BY_CATEGORY"
+    - "STOCK_MOVEMENT_WEEKLY"
+    - "INV_SNAPSHOT"
+    - "INV_BY_PRODUCT"
+    - "INV_AVAILABLE_PRODUCTS"
+    - "INV_LOW_STOCK"
+    - "INV_OUT_OF_STOCK"
+    - "INV_VALUATION_CURRENT"
+
+few_shots:
+  - q: "yo wassup buizwaiz"
+    plan: { mode: "answer", domains: [], compare_to_prior: false, confidence: 0.8 }
+
+  # EXPENSE — totals (today)
+  - q: "expense today"
+    plan:
+      mode: "answer"
+      domains: ["expense"]
+      metric: "total_expense"
+      time: { preset: "today" }
+      compare_to_prior: false
+      confidence: 0.9
+
+  # EXPENSE — compare last month vs prior
+  - q: "compare last month’s expenses to previous month"
+    plan:
+      mode: "answer"
+      domains: ["expense"]
+      metric: "total_expense"
+      time: { preset: "last_month" }
+      compare_to_prior: true
+      confidence: 0.95
+
+  # EXPENSE — report (weekly)
+  - q: "create weekly expense report"
+    plan:
+      mode: "report"
+      domains: ["expense"]
+      metric: "total_expense"
+      time: { preset: "this_week" }
+      compare_to_prior: false
+      confidence: 0.9
+
+  # SALES — top product this month
+  - q: "highest selling product this month"
+    plan:
+      mode: "answer"
+      domains: ["sales"]
+      metric: "top_product"
+      time: { preset: "this_month" }
+      compare_to_prior: false
+      confidence: 0.9
+
+  # SALES — compare this week vs last week
+  - q: "compare this week’s sales to last week"
+    plan:
+      mode: "answer"
+      domains: ["sales"]
+      metric: "revenue"
+      time: { preset: "this_week" }
+      compare_to_prior: true
+      confidence: 0.95
+
+  # INVENTORY — report as of date (no compare)
+  - q: "create an inventory report as of Sept 30, 2025"
+    plan:
+      mode: "report"
+      domains: ["inventory"]
+      metric: "summary"
+      time: { preset: "as_of", end: "2025-09-30" }
+      compare_to_prior: false
+      confidence: 0.95
+
+  # INVENTORY — attempt a compare (should be blocked by guard)
+  - q: "compare inventory this month vs last month"
+    plan:
+      mode: "answer"
+      domains: ["inventory"]
+      metric: "summary"
+      time: { preset: "this_month" }
+      compare_to_prior: true
+      confidence: 0.8
